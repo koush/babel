@@ -88,11 +88,6 @@ public class Babel extends Activity {
         startService(new Intent(this, BabelService.class));
     }
 
-    void startAccessibility() {
-        Intent intent = new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS);
-        startActivityForResult(intent, 0);
-    }
-
     void getToken(final Account account, final int position) {
         AccountManager am = AccountManager.get(this);
         if (am == null)

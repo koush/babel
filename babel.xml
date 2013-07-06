@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<permissions>
+    <allow-permission package="com.koushikdutta.babel" name="android.permission.INTERCEPT_SMS" />
+    <allow-permission package="com.koushikdutta.babel" name="android.permission.BROADCAST_SMS" />
+</permissions>

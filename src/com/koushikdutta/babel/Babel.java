@@ -71,14 +71,6 @@ public class Babel extends Activity {
             }
         });
 
-        final Button accessibility = (Button)findViewById(R.id.accessibility);
-        accessibility.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startAccessibility();
-            }
-        });
-
         String selectedAccount = settings.getString("account", null);
 
         NULL = new Account(getString(R.string.disable), "com.google");
@@ -93,19 +85,6 @@ public class Babel extends Activity {
         lv.setItemChecked(selected, true);
         lv.requestLayout();
 
-        receiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                boolean connected = intent.getBooleanExtra("connected", false);
-                if (connected)
-                    accessibility.setVisibility(View.GONE);
-                else
-                    accessibility.setVisibility(View.VISIBLE);
-            }
-        };
-
-        IntentFilter filter = new IntentFilter("com.koushikdutta.babel.STATUS");
-        registerReceiver(receiver, filter);
         startService(new Intent(this, BabelService.class));
     }
 
@@ -113,14 +92,6 @@ public class Babel extends Activity {
         Intent intent = new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS);
         startActivityForResult(intent, 0);
     }
-
-    @Override
-    protected void onDestroy() {
-        unregisterReceiver(receiver);
-        super.onDestroy();
-    }
-
-    BroadcastReceiver receiver;
 
     void getToken(final Account account, final int position) {
         AccountManager am = AccountManager.get(this);

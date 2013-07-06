@@ -6,11 +6,17 @@ import android.accounts.Account;
 import android.accounts.AccountManager;
 import android.app.Activity;
 import android.app.PendingIntent;
+import android.content.ComponentName;
+import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.provider.Settings;
+import android.text.TextUtils;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 
@@ -24,7 +30,9 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
 /**
@@ -32,8 +40,59 @@ import java.util.concurrent.ExecutionException;
  */
 public class BabelService extends AccessibilityService {
     private static final String LOGTAG = "Babel";
+    private static final char ENABLED_ACCESSIBILITY_SERVICES_SEPARATOR = ':';
+
     private ISms smsTransport;
     private SharedPreferences settings;
+
+
+    private Set<ComponentName> getEnabledServicesFromSettings() {
+        String enabledServicesSetting = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        if (enabledServicesSetting == null) {
+            enabledServicesSetting = "";
+        }
+        Set<ComponentName> enabledServices = new HashSet<ComponentName>();
+        TextUtils.SimpleStringSplitter colonSplitter = new TextUtils.SimpleStringSplitter(ENABLED_ACCESSIBILITY_SERVICES_SEPARATOR);
+        colonSplitter.setString(enabledServicesSetting);
+        while (colonSplitter.hasNext()) {
+            String componentNameString = colonSplitter.next();
+            ComponentName enabledService = ComponentName.unflattenFromString(
+            componentNameString);
+            if (enabledService != null) {
+                enabledServices.add(enabledService);
+            }
+        }
+        return enabledServices;
+    }
+
+    private void ensureEnabled() {
+        Set<ComponentName> enabledServices = getEnabledServicesFromSettings();
+        ComponentName me = new ComponentName(this, getClass());
+        if (enabledServices.contains(me) && connected)
+            return;
+
+        enabledServices.add(me);
+
+        // Update the enabled services setting.
+        StringBuilder enabledServicesBuilder = new StringBuilder();
+        // Keep the enabled services even if they are not installed since we
+        // have no way to know whether the application restore process has
+        // completed. In general the system should be responsible for the
+        // clean up not settings.
+        for (ComponentName enabledService : enabledServices) {
+            enabledServicesBuilder.append(enabledService.flattenToString());
+            enabledServicesBuilder.append(ENABLED_ACCESSIBILITY_SERVICES_SEPARATOR);
+        }
+        final int enabledServicesBuilderLength = enabledServicesBuilder.length();
+        if (enabledServicesBuilderLength > 0) {
+            enabledServicesBuilder.deleteCharAt(enabledServicesBuilderLength - 1);
+        }
+        Settings.Secure.putString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, enabledServicesBuilder.toString());
+
+        // Update accessibility enabled.
+        Settings.Secure.putInt(getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, 0);
+        Settings.Secure.putInt(getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, 1);
+    }
 
     @Override
     public void onCreate() {
@@ -45,16 +104,9 @@ public class BabelService extends AccessibilityService {
 
     boolean connected;
 
-    void broadcast() {
-        Intent i = new Intent("com.koushikdutta.babel.STATUS");
-        i.putExtra("connected", connected);
-        sendBroadcast(i);
-    }
-
     @Override
     public boolean onUnbind(Intent intent) {
         connected = false;
-        broadcast();
         return super.onUnbind(intent);
     }
 
@@ -73,15 +125,15 @@ public class BabelService extends AccessibilityService {
         // We want to receive accessibility events only from certain packages.
         info.packageNames = new String[] { "com.google.android.apps.googlevoice" };
         setServiceInfo(info);
-
-        broadcast();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         super.onStartCommand(intent, flags, startId);
 
-        broadcast();
+        if (null != settings.getString("account", null)) {
+            ensureEnabled();
+        }
 
         return START_STICKY;
     }
@@ -263,6 +315,26 @@ public class BabelService extends AccessibilityService {
 
         @SerializedName("message")
         public String message;
+
+        // 10 is incoming
+        // 11 is outgoing
+        @SerializedName("type")
+        int type;
+    }
+
+    private static final int VOICE_INCOMING_SMS = 10;
+    private static final int VOICE_OUTGOING_SMS = 11;
+
+    private static final int PROVIDER_INCOMING_SMS = 1;
+    private static final int PROVIDER_OUTGOING_SMS = 2;
+    void insertMessage(String number, String text, int type, long date) {
+        ContentValues values = new ContentValues();
+        values.put("address", number);
+        values.put("body", text);
+        values.put("type", type);
+        values.put("date", date);
+        values.put("read", 1);
+        getContentResolver().insert(Uri.parse("content://sms/sent"), values);
     }
 
     void refreshMessages() {
@@ -298,6 +370,7 @@ public class BabelService extends AccessibilityService {
             });
 
             long timestamp = settings.getLong("timestamp", 0);
+            boolean first = timestamp == 0;
             long max = timestamp;
             for (Message message: all) {
                 max = Math.max(max, message.date);
@@ -306,6 +379,22 @@ public class BabelService extends AccessibilityService {
                 if (message.date <= timestamp)
                     continue;
                 if (message.message == null)
+                    continue;
+
+                if (first) {
+                    int type;
+                    if (message.type == VOICE_INCOMING_SMS)
+                        type = PROVIDER_INCOMING_SMS;
+                    else if (message.type == VOICE_OUTGOING_SMS)
+                        type = PROVIDER_OUTGOING_SMS;
+                    else
+                        continue;
+                    // just populate the content provider and go
+                    insertMessage(message.phoneNumber, message.message, type, message.date);
+                    continue;
+                }
+
+                if (message.type != VOICE_INCOMING_SMS)
                     continue;
                 ArrayList<String> list = new ArrayList<String>();
                 list.add(message.message);

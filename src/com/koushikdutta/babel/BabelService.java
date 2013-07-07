@@ -529,9 +529,30 @@ public class BabelService extends AccessibilityService {
         }
     }
 
+    void startRefresh() {
+        needsRefresh = true;
+
+        // if a sync is in progress, dont start another
+        if (refreshThread != null && refreshThread.isAlive())
+            return;
+
+        refreshThread = new Thread() {
+            @Override
+            public void run() {
+                while (needsRefresh) {
+                    needsRefresh = false;
+                    refreshMessages();
+                }
+            }
+        };
+
+        refreshThread.start();
+    }
+
+    boolean needsRefresh;
+    Thread refreshThread;
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        Log.d(LOGTAG, event.toString());
         if (event.getEventType() != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED)
             return;
 
@@ -540,12 +561,7 @@ public class BabelService extends AccessibilityService {
 
         clearGoogleVoiceNotifications();
 
-        new Thread() {
-            @Override
-            public void run() {
-                refreshMessages();
-            }
-        }.start();
+        startRefresh();
     }
 
     @Override

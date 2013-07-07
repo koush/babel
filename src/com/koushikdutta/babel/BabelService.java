@@ -5,16 +5,17 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.accounts.Account;
 import android.accounts.AccountManager;
 import android.app.Activity;
+import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.ContentValues;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.os.UserHandle;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
@@ -24,14 +25,19 @@ import com.android.internal.telephony.ISms;
 import com.android.internal.telephony.ISmsMiddleware;
 import com.google.gson.JsonObject;
 import com.google.gson.annotations.SerializedName;
+import com.koushikdutta.async.future.FutureCallback;
+import com.koushikdutta.async.http.Multimap;
 import com.koushikdutta.ion.Ion;
+import com.koushikdutta.ion.Response;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
@@ -40,6 +46,7 @@ import java.util.concurrent.ExecutionException;
  */
 public class BabelService extends AccessibilityService {
     private static final String LOGTAG = "Babel";
+    private static final String GOOGLE_VOICE_PACKAGE = "com.google.android.apps.googlevoice";
     private static final char ENABLED_ACCESSIBILITY_SERVICES_SEPARATOR = ':';
 
     private ISms smsTransport;
@@ -100,6 +107,8 @@ public class BabelService extends AccessibilityService {
 
         settings = getSharedPreferences("settings", MODE_PRIVATE);
         registerSmsMiddleware();
+
+        clearGoogleVoiceNotifications();
     }
 
     boolean connected;
@@ -123,7 +132,7 @@ public class BabelService extends AccessibilityService {
         // We want to receive events in a certain interval.
         info.notificationTimeout = 100;
         // We want to receive accessibility events only from certain packages.
-        info.packageNames = new String[] { "com.google.android.apps.googlevoice" };
+        info.packageNames = new String[] { GOOGLE_VOICE_PACKAGE };
         setServiceInfo(info);
     }
 
@@ -172,7 +181,7 @@ public class BabelService extends AccessibilityService {
         }
     }
 
-    void fetchInfo(String authToken) throws ExecutionException, InterruptedException {
+    void fetchRnrSe(String authToken) throws ExecutionException, InterruptedException {
         JsonObject json = Ion.with(this)
         .load("https://www.google.com/voice/request/user")
         .setHeader("Authorization", "GoogleLogin auth=" + authToken)
@@ -186,8 +195,38 @@ public class BabelService extends AccessibilityService {
         .commit();
     }
 
+    private static final String MOBILE_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 5_0 like Mac OS X) AppleWebKit/534.46 (KHTML, like Gecko) Version/5.1 Mobile/9A334 Safari/7534.48.3";
+
+    void fetchGvx(String authToken) throws ExecutionException, InterruptedException {
+        Response<String> response = Ion.with(this)
+        .load("https://www.google.com/voice/m?initialauth&pli=1")
+        .followRedirect(false)
+        .userAgent(MOBILE_AGENT)
+        .setHeader("Authorization", "GoogleLogin auth=" + authToken)
+        .asString()
+        .withResponse()
+        .get();
+
+        Multimap cookies = Multimap.parseHeader(response.getHeaders().get("Set-Cookie"));
+        String gvx = cookies.getString("gvx");
+        if (gvx == null)
+            throw new ExecutionException(new Exception("unable to retrieve gvx"));
+        settings.edit()
+        .putString("gvx", gvx)
+        .commit();
+    }
+
+    private void addRecent(String text) {
+        while (recentSent.size() > 20)
+            recentSent.remove();
+        recentSent.add(text);
+    }
+
+    PriorityQueue<String> recentSent = new PriorityQueue<String>();
+    final static boolean useGvx = false;
     public void onSendMultipartText(String destAddr, String scAddr, List<String> texts, final List<PendingIntent> sentIntents, final List<PendingIntent> deliveryIntents, boolean multipart) {
         String rnrse = settings.getString("_rns_se", null);
+        String gvx = settings.getString("gvx", null);
         String account = settings.getString("account", null);
         String authToken;
 
@@ -195,10 +234,17 @@ public class BabelService extends AccessibilityService {
             Bundle bundle = AccountManager.get(this).getAuthToken(new Account(account, "com.google"), "grandcentral", true, null, null).getResult();
             authToken = bundle.getString(AccountManager.KEY_AUTHTOKEN);
 
-            if (rnrse == null) {
-                fetchInfo(authToken);
-
-                rnrse = settings.getString("_rns_se", null);
+            if (useGvx) {
+                if (gvx == null) {
+                    fetchGvx(authToken);
+                    gvx = settings.getString("gvx", null);
+                }
+            }
+            else {
+                if (rnrse == null) {
+                    fetchRnrSe(authToken);
+                    rnrse = settings.getString("_rns_se", null);
+                }
             }
         }
         catch (Exception e) {
@@ -216,10 +262,13 @@ public class BabelService extends AccessibilityService {
                 si = null;
 
             try {
-                send(authToken, rnrse, destAddr, text);
+                if (useGvx)
+                    sendGvx(authToken, gvx, destAddr, text);
+                else
+                    sendRnrSe(authToken, rnrse, destAddr, text);
+                addRecent(text);
                 if (si != null)
                     si.send(Activity.RESULT_OK);
-
                 continue;
             }
             catch (Exception e) {
@@ -227,10 +276,18 @@ public class BabelService extends AccessibilityService {
             }
 
             try {
-                // fetch info and try again
-                fetchInfo(authToken);
-
-                send(authToken, rnrse, destAddr, text);
+                if (useGvx) {
+                    fetchGvx(authToken);
+                    gvx = settings.getString("gvx", null);
+                    sendGvx(authToken, gvx, destAddr, text);
+                }
+                else {
+                    // fetch info and try again
+                    fetchRnrSe(authToken);
+                    rnrse = settings.getString("_rns_se", null);
+                    sendRnrSe(authToken, rnrse, destAddr, text);
+                }
+                addRecent(text);
                 if (si != null)
                     si.send(Activity.RESULT_OK);
             }
@@ -241,11 +298,10 @@ public class BabelService extends AccessibilityService {
         }
     }
 
-    void send(String authToken, String rnrse, String number, String text) throws Exception {
+    void sendRnrSe(String authToken, String rnrse, String number, String text) throws Exception {
         JsonObject json = Ion.with(this)
         .load("https://www.google.com/voice/sms/send/")
         .setHeader("Authorization", "GoogleLogin auth=" + authToken)
-        .setBodyParameter("id", "")
         .setBodyParameter("phoneNumber", number)
         .setBodyParameter("sendErrorSms", "0")
         .setBodyParameter("text", text)
@@ -255,6 +311,24 @@ public class BabelService extends AccessibilityService {
 
         if (!json.get("ok").getAsBoolean())
             throw new Exception(json.toString());
+    }
+
+    void sendGvx(String authToken, String gvx, String number, String text) throws Exception {
+        JsonObject json = new JsonObject();
+        json.addProperty("gvx", gvx);
+
+        Response<String> response = Ion.with(this)
+        .load("https://www.google.com/voice/m/x")
+        .setHeader("Authorization", "GoogleLogin auth=" + authToken)
+        .userAgent(MOBILE_AGENT)
+        .followRedirect(false)
+        .addQuery("m", "sms")
+        .addQuery("n", number)
+        .addQuery("txt", text)
+        .setJsonObjectBody(json)
+        .asString()
+        .withResponse()
+        .get();
     }
 
     ISmsMiddleware.Stub stub = new ISmsMiddleware.Stub() {
@@ -381,6 +455,8 @@ public class BabelService extends AccessibilityService {
                 if (message.message == null)
                     continue;
 
+                // on first sync, just populate the mms provider...
+                // don't send any broadcasts.
                 if (first) {
                     int type;
                     if (message.type == VOICE_INCOMING_SMS)
@@ -391,6 +467,21 @@ public class BabelService extends AccessibilityService {
                         continue;
                     // just populate the content provider and go
                     insertMessage(message.phoneNumber, message.message, type, message.date);
+                    continue;
+                }
+
+                // sync up outgoing messages?
+                if (message.type == VOICE_OUTGOING_SMS) {
+                    boolean found = false;
+                    for (String recent: recentSent) {
+                        if (TextUtils.equals(recent, message.message)) {
+                            recentSent.remove(message.message);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found)
+                        insertMessage(message.phoneNumber, message.message, PROVIDER_OUTGOING_SMS, message.date);
                     continue;
                 }
 
@@ -414,14 +505,40 @@ public class BabelService extends AccessibilityService {
         }
     }
 
+    Object internalNotificationService;
+    Method cancelAllNotifications;
+    int userId;
+    private void clearGoogleVoiceNotifications() {
+        try {
+            if (cancelAllNotifications == null) {
+                // run this to get the internal service to populate
+                NotificationManager nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+                nm.cancelAll();
+
+                Field f = NotificationManager.class.getDeclaredField("sService");
+                f.setAccessible(true);
+                internalNotificationService = f.get(null);
+                cancelAllNotifications = internalNotificationService.getClass().getDeclaredMethod("cancelAllNotifications", String.class, int.class);
+                userId = (Integer)UserHandle.class.getDeclaredMethod("myUserId").invoke(null);
+            }
+            if (cancelAllNotifications != null)
+                cancelAllNotifications.invoke(internalNotificationService, GOOGLE_VOICE_PACKAGE, userId);
+        }
+        catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         Log.d(LOGTAG, event.toString());
         if (event.getEventType() != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED)
             return;
 
-        if (!"com.google.android.apps.googlevoice".equals(event.getPackageName()))
+        if (!GOOGLE_VOICE_PACKAGE.equals(event.getPackageName()))
             return;
+
+        clearGoogleVoiceNotifications();
 
         new Thread() {
             @Override

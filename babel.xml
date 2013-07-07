@@ -3,4 +3,5 @@
     <allow-permission package="com.koushikdutta.babel" name="android.permission.INTERCEPT_SMS" />
     <allow-permission package="com.koushikdutta.babel" name="android.permission.BROADCAST_SMS" />
     <allow-permission package="com.koushikdutta.babel" name="android.permission.WRITE_SECURE_SETTINGS" />
+    <allow-permission package="com.koushikdutta.babel" name="android.permission.CANCEL_NOTIFICATIONS" />
 </permissions>

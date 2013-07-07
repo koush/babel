@@ -248,7 +248,7 @@ public class BabelService extends AccessibilityService {
             }
         }
         catch (Exception e) {
-            e.printStackTrace();
+            Log.e(LOGTAG, "Error fetching tokens", e);
             fail(sentIntents);
             return;
         }
@@ -501,7 +501,7 @@ public class BabelService extends AccessibilityService {
             .commit();
         }
         catch (Exception e) {
-            e.printStackTrace();
+            Log.e(LOGTAG, "Error refreshing messages", e);
         }
     }
 
@@ -525,7 +525,7 @@ public class BabelService extends AccessibilityService {
                 cancelAllNotifications.invoke(internalNotificationService, GOOGLE_VOICE_PACKAGE, userId);
         }
         catch (Exception e) {
-            e.printStackTrace();
+            Log.d(LOGTAG, "Error clearing GoogleVoice notifications", e);
         }
     }
 

@@ -14,7 +14,6 @@ import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
-import android.os.RemoteException;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -22,10 +21,8 @@ import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 
 import com.android.internal.telephony.ISms;
-import com.android.internal.telephony.ISmsMiddleware;
 import com.google.gson.JsonObject;
 import com.google.gson.annotations.SerializedName;
-import com.koushikdutta.async.future.FutureCallback;
 import com.koushikdutta.async.http.Multimap;
 import com.koushikdutta.ion.Ion;
 import com.koushikdutta.ion.Response;
@@ -101,13 +98,25 @@ public class BabelService extends AccessibilityService {
         Settings.Secure.putInt(getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, 1);
     }
 
+    // hook into sms manager to intercept outgoing sms
+    private void registerSmsMiddleware() {
+        try {
+            Class sm = Class.forName("android.os.ServiceManager");
+            Method getService = sm.getMethod("getService", String.class);
+            smsTransport = ISms.Stub.asInterface((IBinder)getService.invoke(null, "isms"));
+        }
+        catch (Exception e) {
+            Log.e(LOGTAG, "register error", e);
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
 
         settings = getSharedPreferences("settings", MODE_PRIVATE);
-        registerSmsMiddleware();
 
+        registerSmsMiddleware();
         clearGoogleVoiceNotifications();
     }
 
@@ -136,28 +145,62 @@ public class BabelService extends AccessibilityService {
         setServiceInfo(info);
     }
 
+    void handleOutgoingSms(Intent intent) {
+        boolean multipart = intent.getBooleanExtra("multipart", false);
+        if (!multipart) {
+            String destAddr = intent.getStringExtra("destAddr");
+            String scAddr = intent.getStringExtra("scAddr");
+            String text = intent.getStringExtra("text");
+            PendingIntent sentIntent = intent.getParcelableExtra("sentIntent");
+            PendingIntent deliveryIntent = intent.getParcelableExtra("deliveryIntent");
+
+            List<PendingIntent> sentIntents = null;
+            List<PendingIntent> deliveryIntents = null;
+            ArrayList<String> texts = new ArrayList<String>();
+            texts.add(text);
+            if (sentIntent != null) {
+                sentIntents = new ArrayList<PendingIntent>();
+                sentIntents.add(sentIntent);
+            }
+            if (deliveryIntent != null) {
+                deliveryIntents = new ArrayList<PendingIntent>();
+                deliveryIntents.add(deliveryIntent);
+            }
+
+            onSendMultipartText(destAddr, scAddr, texts, sentIntents, deliveryIntents, false);
+        }
+        else {
+            String destAddr = intent.getStringExtra("destAddr");
+            String scAddr = intent.getStringExtra("scAddr");
+            ArrayList<String> parts = intent.getStringArrayListExtra("parts");
+            ArrayList<PendingIntent> sentIntents = intent.getParcelableArrayListExtra("sentIntent");
+            ArrayList<PendingIntent> deliveryIntents = intent.getParcelableArrayListExtra("deliveryIntents");
+
+            onSendMultipartText(destAddr, scAddr, parts, sentIntents, deliveryIntents, false);
+        }
+    }
+
     @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
+    public int onStartCommand(final Intent intent, int flags, int startId) {
         super.onStartCommand(intent, flags, startId);
 
         if (null != settings.getString("account", null)) {
             ensureEnabled();
         }
 
-        return START_STICKY;
-    }
+        if (intent == null)
+            return START_STICKY;
 
-    // hook into sms manager to intercept outgoing sms
-    private void registerSmsMiddleware() {
-        try {
-            Class sm = Class.forName("android.os.ServiceManager");
-            Method getService = sm.getMethod("getService", String.class);
-            smsTransport = ISms.Stub.asInterface((IBinder)getService.invoke(null, "isms"));
-            smsTransport.registerSmsMiddleware("babel", stub);
+        if (intent.getAction() == "android.intent.action.NEW_OUTGOING_SMS") {
+            new Thread() {
+                @Override
+                public void run() {
+                    handleOutgoingSms(intent);
+                }
+            }.start();
         }
-        catch (Exception e) {
-            Log.e(LOGTAG, "register error", e);
-        }
+
+        return START_STICKY;
     }
 
     public void fail(List<PendingIntent> sentIntents) {
@@ -331,44 +374,6 @@ public class BabelService extends AccessibilityService {
         .get();
     }
 
-    ISmsMiddleware.Stub stub = new ISmsMiddleware.Stub() {
-        @Override
-        public boolean onSendText(String destAddr, String scAddr, String text, PendingIntent sentIntent, PendingIntent deliveryIntent) throws RemoteException {
-            List<PendingIntent> sentIntents = null;
-            List<PendingIntent> deliveryIntents = null;
-            if (sentIntent != null) {
-                sentIntents = new ArrayList<PendingIntent>();
-                sentIntents.add(sentIntent);
-            }
-            if (deliveryIntent != null) {
-                deliveryIntents = new ArrayList<PendingIntent>();
-                deliveryIntents.add(deliveryIntent);
-            }
-
-            ArrayList<String> texts = new ArrayList<String>();
-            texts.add(text);
-            return onSendMultipartText(destAddr, scAddr, texts, sentIntents, deliveryIntents, false);
-        }
-
-        @Override
-        public boolean onSendMultipartText(String destAddr, String scAddr, List<String> texts, final List<PendingIntent> sentIntents, final List<PendingIntent> deliveryIntents) throws RemoteException {
-            return onSendMultipartText(destAddr, scAddr, texts, sentIntents, deliveryIntents, true);
-        }
-
-        public boolean onSendMultipartText(final String destAddr, final String scAddr, final List<String> texts, final List<PendingIntent> sentIntents, final List<PendingIntent> deliveryIntents, final boolean multipart) throws RemoteException {
-            if (settings.getString("account", null) == null)
-                return false;
-
-            new Thread() {
-                @Override
-                public void run() {
-                    BabelService.this.onSendMultipartText(destAddr, scAddr, texts, sentIntents, deliveryIntents, multipart);
-                }
-            }.start();
-
-            return true;
-        }
-    };
 
     public static class Payload {
         @SerializedName("messageList")

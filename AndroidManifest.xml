@@ -39,5 +39,10 @@
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibilityservice" />
         </service>
 
+        <receiver android:name=".OutgoingSmsReceiver">
+            <intent-filter android:priority="10">
+                <action android:name="android.intent.action.NEW_OUTGOING_SMS" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

@@ -147,37 +147,13 @@ public class BabelService extends AccessibilityService {
 
     void handleOutgoingSms(Intent intent) {
         boolean multipart = intent.getBooleanExtra("multipart", false);
-        if (!multipart) {
-            String destAddr = intent.getStringExtra("destAddr");
-            String scAddr = intent.getStringExtra("scAddr");
-            String text = intent.getStringExtra("text");
-            PendingIntent sentIntent = intent.getParcelableExtra("sentIntent");
-            PendingIntent deliveryIntent = intent.getParcelableExtra("deliveryIntent");
+        String destAddr = intent.getStringExtra("destAddr");
+        String scAddr = intent.getStringExtra("scAddr");
+        ArrayList<String> parts = intent.getStringArrayListExtra("parts");
+        ArrayList<PendingIntent> sentIntents = intent.getParcelableArrayListExtra("sentIntents");
+        ArrayList<PendingIntent> deliveryIntents = intent.getParcelableArrayListExtra("deliveryIntents");
 
-            List<PendingIntent> sentIntents = null;
-            List<PendingIntent> deliveryIntents = null;
-            ArrayList<String> texts = new ArrayList<String>();
-            texts.add(text);
-            if (sentIntent != null) {
-                sentIntents = new ArrayList<PendingIntent>();
-                sentIntents.add(sentIntent);
-            }
-            if (deliveryIntent != null) {
-                deliveryIntents = new ArrayList<PendingIntent>();
-                deliveryIntents.add(deliveryIntent);
-            }
-
-            onSendMultipartText(destAddr, scAddr, texts, sentIntents, deliveryIntents, false);
-        }
-        else {
-            String destAddr = intent.getStringExtra("destAddr");
-            String scAddr = intent.getStringExtra("scAddr");
-            ArrayList<String> parts = intent.getStringArrayListExtra("parts");
-            ArrayList<PendingIntent> sentIntents = intent.getParcelableArrayListExtra("sentIntent");
-            ArrayList<PendingIntent> deliveryIntents = intent.getParcelableArrayListExtra("deliveryIntents");
-
-            onSendMultipartText(destAddr, scAddr, parts, sentIntents, deliveryIntents, false);
-        }
+        onSendMultipartText(destAddr, scAddr, parts, sentIntents, deliveryIntents, multipart);
     }
 
     @Override
@@ -206,21 +182,28 @@ public class BabelService extends AccessibilityService {
     public void fail(List<PendingIntent> sentIntents) {
         if (sentIntents == null)
             return;
-        try {
-            for (PendingIntent si: sentIntents)
-                fail(si);
-        }
-        catch (Exception e) {
+        for (PendingIntent si: sentIntents) {
+            if (si == null)
+                continue;
+            try {
+                si.send();
+            }
+            catch (Exception e) {
+            }
         }
     }
 
-    void fail(PendingIntent sentIntent) {
-        if (sentIntent == null)
+    public void success(List<PendingIntent> sentIntents) {
+        if (sentIntents == null)
             return;
-        try {
-            sentIntent.send();
-        }
-        catch (Exception e) {
+        for (PendingIntent si: sentIntents) {
+            if (si == null)
+                continue;
+            try {
+                si.send(Activity.RESULT_OK);
+            }
+            catch (Exception e) {
+            }
         }
     }
 
@@ -296,48 +279,43 @@ public class BabelService extends AccessibilityService {
             return;
         }
 
-        for (int i = 0; i < texts.size(); i++) {
-            String text = texts.get(i);
-            PendingIntent si;
-            if (sentIntents != null)
-                si = sentIntents.get(i);
+        StringBuilder textBuilder = new StringBuilder();
+        for (String text: texts) {
+            textBuilder.append(text);
+        }
+        String text = textBuilder.toString();
+
+        try {
+            if (useGvx)
+                sendGvx(authToken, gvx, destAddr, text);
             else
-                si = null;
+                sendRnrSe(authToken, rnrse, destAddr, text);
+            addRecent(text);
+            success(sentIntents);
+            return;
+        }
+        catch (Exception e) {
+            Log.d(LOGTAG, "send error", e);
+        }
 
-            try {
-                if (useGvx)
-                    sendGvx(authToken, gvx, destAddr, text);
-                else
-                    sendRnrSe(authToken, rnrse, destAddr, text);
-                addRecent(text);
-                if (si != null)
-                    si.send(Activity.RESULT_OK);
-                continue;
+        try {
+            if (useGvx) {
+                fetchGvx(authToken);
+                gvx = settings.getString("gvx", null);
+                sendGvx(authToken, gvx, destAddr, text);
             }
-            catch (Exception e) {
-                Log.d(LOGTAG, "send error", e);
+            else {
+                // fetch info and try again
+                fetchRnrSe(authToken);
+                rnrse = settings.getString("_rns_se", null);
+                sendRnrSe(authToken, rnrse, destAddr, text);
             }
-
-            try {
-                if (useGvx) {
-                    fetchGvx(authToken);
-                    gvx = settings.getString("gvx", null);
-                    sendGvx(authToken, gvx, destAddr, text);
-                }
-                else {
-                    // fetch info and try again
-                    fetchRnrSe(authToken);
-                    rnrse = settings.getString("_rns_se", null);
-                    sendRnrSe(authToken, rnrse, destAddr, text);
-                }
-                addRecent(text);
-                if (si != null)
-                    si.send(Activity.RESULT_OK);
-            }
-            catch (Exception e) {
-                Log.d(LOGTAG, "send failure", e);
-                fail(si);
-            }
+            addRecent(text);
+            success(sentIntents);
+        }
+        catch (Exception e) {
+            Log.d(LOGTAG, "send failure", e);
+            fail(sentIntents);
         }
     }
 

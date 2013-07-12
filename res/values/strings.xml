@@ -5,4 +5,6 @@
     <string name="disable">Disable</string>
     <string name="accessibility_disabled">Enable the "Babel" Accessibility Service</string>
     <string name="account">Account</string>
+
+    <string name="not_granted">Permission unavailable:\n%s</string>
 </resources>

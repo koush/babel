@@ -1,16 +1,12 @@
-package com.koushikdutta.babel;
+package org.cyanogenmod.babel;
 
-import android.*;
 import android.Manifest;
 import android.accounts.Account;
 import android.accounts.AccountManager;
 import android.accounts.AccountManagerCallback;
 import android.accounts.AccountManagerFuture;
 import android.app.Activity;
-import android.content.BroadcastReceiver;
-import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
@@ -19,11 +15,9 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
-import android.widget.Button;
 import android.widget.CheckedTextView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
-import android.widget.Switch;
 import android.widget.TextView;
 
 public class Babel extends Activity {

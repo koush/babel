@@ -1,16 +1,9 @@
-package com.koushikdutta.babel;
+package org.cyanogenmod.babel;
 
 import android.content.Context;
-import android.database.Cursor;
-import android.net.Uri;
 import android.net.wifi.WifiManager;
 import android.os.Handler;
 import android.os.PowerManager;
-import android.provider.ContactsContract;
-import android.util.Base64;
-
-import java.security.MessageDigest;
-import java.util.HashSet;
 
 /**
  * Created by koush on 6/23/13.

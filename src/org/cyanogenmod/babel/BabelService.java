@@ -1,4 +1,4 @@
-package com.koushikdutta.babel;
+package org.cyanogenmod.babel;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;

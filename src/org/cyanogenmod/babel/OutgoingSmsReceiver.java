@@ -1,4 +1,4 @@
-package com.koushikdutta.babel;
+package org.cyanogenmod.babel;
 
 import android.app.Activity;
 import android.content.BroadcastReceiver;

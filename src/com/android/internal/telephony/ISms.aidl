@@ -26,10 +26,9 @@ import java.util.List;
  * retrieve the ISms interface from Android:</p>
  * <pre>private static ISms getSmsInterface()
             throws DeadObjectException {
-    IServiceManager sm = ServiceManagerNative.getDefault();
-    ISms ss;
-    ss = ISms.Stub.asInterface(sm.getService("isms"));
-    return ss;
+    Class sm = Class.forName("android.os.ServiceManager");
+    Method getService = sm.getMethod("getService", String.class);
+    smsTransport = ISms.Stub.asInterface((IBinder)getService.invoke(null, "isms"));
 }
  * </pre>
  */

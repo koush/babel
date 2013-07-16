@@ -20,7 +20,7 @@ import android.app.PendingIntent;
 
 import java.util.List;
 
-/** Interface for applications to access the ICC phone book.
+/** Interface for applications to access the SMS Manager Proxy.
  *
  * <p>The following code snippet demonstrates a static method to
  * retrieve the ISms interface from Android:</p>

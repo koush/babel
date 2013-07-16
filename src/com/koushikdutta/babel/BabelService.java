@@ -49,7 +49,7 @@ public class BabelService extends AccessibilityService {
     private ISms smsTransport;
     private SharedPreferences settings;
 
-
+    // check which accessibility services are enabled
     private Set<ComponentName> getEnabledServicesFromSettings() {
         String enabledServicesSetting = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
         if (enabledServicesSetting == null) {
@@ -69,6 +69,9 @@ public class BabelService extends AccessibilityService {
         return enabledServices;
     }
 
+    // ensure that this accessibility service is enabled.
+    // the service watches for google voice notifications to know when to check for new
+    // messages.
     private void ensureEnabled() {
         Set<ComponentName> enabledServices = getEnabledServicesFromSettings();
         ComponentName me = new ComponentName(this, getClass());
@@ -98,7 +101,8 @@ public class BabelService extends AccessibilityService {
         Settings.Secure.putInt(getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, 1);
     }
 
-    // hook into sms manager to intercept outgoing sms
+    // hook into sms manager to be able to synthesize SMS events.
+    // new messages from google voice get mocked out as real SMS events in Android.
     private void registerSmsMiddleware() {
         try {
             Class sm = Class.forName("android.os.ServiceManager");
@@ -128,6 +132,8 @@ public class BabelService extends AccessibilityService {
         return super.onUnbind(intent);
     }
 
+    // set the accessibility filter to
+    // watch only for google voice notifications
     @Override
     protected void onServiceConnected (){
         super.onServiceConnected();
@@ -145,6 +151,8 @@ public class BabelService extends AccessibilityService {
         setServiceInfo(info);
     }
 
+    // parse out the intent extras from android.intent.action.NEW_OUTGOING_SMS
+    // and send it off via google voice
     void handleOutgoingSms(Intent intent) {
         boolean multipart = intent.getBooleanExtra("multipart", false);
         String destAddr = intent.getStringExtra("destAddr");
@@ -167,6 +175,7 @@ public class BabelService extends AccessibilityService {
         if (intent == null)
             return START_STICKY;
 
+        // handle an outgoing sms on a background thread.
         if (intent.getAction() == "android.intent.action.NEW_OUTGOING_SMS") {
             new Thread() {
                 @Override
@@ -179,6 +188,7 @@ public class BabelService extends AccessibilityService {
         return START_STICKY;
     }
 
+    // mark all sent intents as failures
     public void fail(List<PendingIntent> sentIntents) {
         if (sentIntents == null)
             return;
@@ -193,6 +203,7 @@ public class BabelService extends AccessibilityService {
         }
     }
 
+    // mark all sent intents as successfully sent
     public void success(List<PendingIntent> sentIntents) {
         if (sentIntents == null)
             return;
@@ -207,6 +218,7 @@ public class BabelService extends AccessibilityService {
         }
     }
 
+    // fetch the weirdo opaque token google voice needs...
     void fetchRnrSe(String authToken) throws ExecutionException, InterruptedException {
         JsonObject json = Ion.with(this)
         .load("https://www.google.com/voice/request/user")
@@ -221,56 +233,30 @@ public class BabelService extends AccessibilityService {
         .commit();
     }
 
-    private static final String MOBILE_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 5_0 like Mac OS X) AppleWebKit/534.46 (KHTML, like Gecko) Version/5.1 Mobile/9A334 Safari/7534.48.3";
-
-    void fetchGvx(String authToken) throws ExecutionException, InterruptedException {
-        Response<String> response = Ion.with(this)
-        .load("https://www.google.com/voice/m?initialauth&pli=1")
-        .followRedirect(false)
-        .userAgent(MOBILE_AGENT)
-        .setHeader("Authorization", "GoogleLogin auth=" + authToken)
-        .asString()
-        .withResponse()
-        .get();
-
-        Multimap cookies = Multimap.parseHeader(response.getHeaders().get("Set-Cookie"));
-        String gvx = cookies.getString("gvx");
-        if (gvx == null)
-            throw new ExecutionException(new Exception("unable to retrieve gvx"));
-        settings.edit()
-        .putString("gvx", gvx)
-        .commit();
-    }
-
+    // mark an outgoing text as recently sent, so if it comes in via
+    // round trip, we ignore it.
+    PriorityQueue<String> recentSent = new PriorityQueue<String>();
     private void addRecent(String text) {
         while (recentSent.size() > 20)
             recentSent.remove();
         recentSent.add(text);
     }
 
-    PriorityQueue<String> recentSent = new PriorityQueue<String>();
-    final static boolean useGvx = false;
+    // send an outgoing sms event via google voice
     public void onSendMultipartText(String destAddr, String scAddr, List<String> texts, final List<PendingIntent> sentIntents, final List<PendingIntent> deliveryIntents, boolean multipart) {
+        // grab the account and wacko opaque routing token thing
         String rnrse = settings.getString("_rns_se", null);
-        String gvx = settings.getString("gvx", null);
         String account = settings.getString("account", null);
         String authToken;
 
         try {
+            // grab the auth token
             Bundle bundle = AccountManager.get(this).getAuthToken(new Account(account, "com.google"), "grandcentral", true, null, null).getResult();
             authToken = bundle.getString(AccountManager.KEY_AUTHTOKEN);
 
-            if (useGvx) {
-                if (gvx == null) {
-                    fetchGvx(authToken);
-                    gvx = settings.getString("gvx", null);
-                }
-            }
-            else {
-                if (rnrse == null) {
-                    fetchRnrSe(authToken);
-                    rnrse = settings.getString("_rns_se", null);
-                }
+            if (rnrse == null) {
+                fetchRnrSe(authToken);
+                rnrse = settings.getString("_rns_se", null);
             }
         }
         catch (Exception e) {
@@ -279,6 +265,7 @@ public class BabelService extends AccessibilityService {
             return;
         }
 
+        // combine the multipart text into one string
         StringBuilder textBuilder = new StringBuilder();
         for (String text: texts) {
             textBuilder.append(text);
@@ -286,10 +273,9 @@ public class BabelService extends AccessibilityService {
         String text = textBuilder.toString();
 
         try {
-            if (useGvx)
-                sendGvx(authToken, gvx, destAddr, text);
-            else
-                sendRnrSe(authToken, rnrse, destAddr, text);
+            // send it off, and note that we recently sent this message
+            // for round trip tracking
+            sendRnrSe(authToken, rnrse, destAddr, text);
             addRecent(text);
             success(sentIntents);
             return;
@@ -299,17 +285,10 @@ public class BabelService extends AccessibilityService {
         }
 
         try {
-            if (useGvx) {
-                fetchGvx(authToken);
-                gvx = settings.getString("gvx", null);
-                sendGvx(authToken, gvx, destAddr, text);
-            }
-            else {
-                // fetch info and try again
-                fetchRnrSe(authToken);
-                rnrse = settings.getString("_rns_se", null);
-                sendRnrSe(authToken, rnrse, destAddr, text);
-            }
+            // on failure, fetch info and try again
+            fetchRnrSe(authToken);
+            rnrse = settings.getString("_rns_se", null);
+            sendRnrSe(authToken, rnrse, destAddr, text);
             addRecent(text);
             success(sentIntents);
         }
@@ -319,6 +298,7 @@ public class BabelService extends AccessibilityService {
         }
     }
 
+    // hit the google voice api to send a text
     void sendRnrSe(String authToken, String rnrse, String number, String text) throws Exception {
         JsonObject json = Ion.with(this)
         .load("https://www.google.com/voice/sms/send/")
@@ -333,25 +313,6 @@ public class BabelService extends AccessibilityService {
         if (!json.get("ok").getAsBoolean())
             throw new Exception(json.toString());
     }
-
-    void sendGvx(String authToken, String gvx, String number, String text) throws Exception {
-        JsonObject json = new JsonObject();
-        json.addProperty("gvx", gvx);
-
-        Response<String> response = Ion.with(this)
-        .load("https://www.google.com/voice/m/x")
-        .setHeader("Authorization", "GoogleLogin auth=" + authToken)
-        .userAgent(MOBILE_AGENT)
-        .followRedirect(false)
-        .addQuery("m", "sms")
-        .addQuery("n", number)
-        .addQuery("txt", text)
-        .setJsonObjectBody(json)
-        .asString()
-        .withResponse()
-        .get();
-    }
-
 
     public static class Payload {
         @SerializedName("messageList")
@@ -384,6 +345,10 @@ public class BabelService extends AccessibilityService {
 
     private static final int PROVIDER_INCOMING_SMS = 1;
     private static final int PROVIDER_OUTGOING_SMS = 2;
+    // insert a message into the sms/mms provider.
+    // we do this in the case of outgoing messages
+    // that were not sent via this phone, and also on initial
+    // message sync.
     void insertMessage(String number, String text, int type, long date) {
         ContentValues values = new ContentValues();
         values.put("address", number);
@@ -394,12 +359,14 @@ public class BabelService extends AccessibilityService {
         getContentResolver().insert(Uri.parse("content://sms/sent"), values);
     }
 
+    // refresh the messages that were on the server
     void refreshMessages() {
         String account = settings.getString("account", null);
         if (account == null)
             return;
 
         try {
+            // tokens!
             Bundle bundle = AccountManager.get(this).getAuthToken(new Account(account, "com.google"), "grandcentral", true, null, null).getResult();
             String authToken = bundle.getString(AccountManager.KEY_AUTHTOKEN);
 
@@ -415,6 +382,7 @@ public class BabelService extends AccessibilityService {
                     all.add(message);
             }
 
+            // sort by date order so the events get added in the same order
             Collections.sort(all, new Comparator<Message>() {
                 @Override
                 public int compare(Message lhs, Message rhs) {
@@ -453,7 +421,7 @@ public class BabelService extends AccessibilityService {
                     continue;
                 }
 
-                // sync up outgoing messages?
+                // sync up outgoing messages
                 if (message.type == VOICE_OUTGOING_SMS) {
                     boolean found = false;
                     for (String recent: recentSent) {
@@ -473,6 +441,7 @@ public class BabelService extends AccessibilityService {
                 ArrayList<String> list = new ArrayList<String>();
                 list.add(message.message);
                 try {
+                    // synthesize a BROADCAST_SMS event
                     smsTransport.synthesizeMessages(message.phoneNumber, null, list, message.date);
                 }
                 catch (Exception e) {
@@ -488,6 +457,7 @@ public class BabelService extends AccessibilityService {
         }
     }
 
+    // clear the google voice notification so the user doesn't get double notified.
     Object internalNotificationService;
     Method cancelAllNotifications;
     int userId;

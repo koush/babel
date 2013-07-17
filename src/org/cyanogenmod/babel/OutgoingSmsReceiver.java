@@ -12,10 +12,8 @@ import android.util.Log;
 public class OutgoingSmsReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
-        Log.d("BABEL", "sms");
         if (context.getSharedPreferences("settings", Context.MODE_PRIVATE).getString("account", null) == null)
             return;
-        Log.d("BABEL", "processing sms");
 
         abortBroadcast();
         setResultCode(Activity.RESULT_CANCELED);

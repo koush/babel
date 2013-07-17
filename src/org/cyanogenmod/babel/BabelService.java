@@ -43,7 +43,6 @@ import java.util.concurrent.ExecutionException;
  */
 public class BabelService extends AccessibilityService {
     private static final String LOGTAG = "Babel";
-    private static final String GOOGLE_VOICE_PACKAGE = "com.google.android.apps.googlevoice";
     private static final char ENABLED_ACCESSIBILITY_SERVICES_SEPARATOR = ':';
 
     private ISms smsTransport;
@@ -147,7 +146,7 @@ public class BabelService extends AccessibilityService {
         // We want to receive events in a certain interval.
         info.notificationTimeout = 100;
         // We want to receive accessibility events only from certain packages.
-        info.packageNames = new String[] { GOOGLE_VOICE_PACKAGE };
+        info.packageNames = new String[] { Helper.GOOGLE_VOICE_PACKAGE };
         setServiceInfo(info);
     }
 
@@ -475,7 +474,7 @@ public class BabelService extends AccessibilityService {
                 userId = (Integer)UserHandle.class.getDeclaredMethod("myUserId").invoke(null);
             }
             if (cancelAllNotifications != null)
-                cancelAllNotifications.invoke(internalNotificationService, GOOGLE_VOICE_PACKAGE, userId);
+                cancelAllNotifications.invoke(internalNotificationService, Helper.GOOGLE_VOICE_PACKAGE, userId);
         }
         catch (Exception e) {
             Log.d(LOGTAG, "Error clearing GoogleVoice notifications", e);
@@ -509,7 +508,7 @@ public class BabelService extends AccessibilityService {
         if (event.getEventType() != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED)
             return;
 
-        if (!GOOGLE_VOICE_PACKAGE.equals(event.getPackageName()))
+        if (!Helper.GOOGLE_VOICE_PACKAGE.equals(event.getPackageName()))
             return;
 
         clearGoogleVoiceNotifications();
